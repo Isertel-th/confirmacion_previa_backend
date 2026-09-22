@@ -71,13 +71,11 @@ app.get('/api/datos', (req, res) => {
   let datos = leerExcel(PATH_BASE);
   
   datos = datos.map((d, i) => {
-    // Normalizar cliente
-    const cliente = d.CLIENTE || d.Cliente || d.cliente || d['CLIENTE'] || '';
+    // Garantizar obtención de CLIENTE
+    const cliente = d.CLIENTE || d.Cliente || d.cliente || '';
 
-    // Normalizar y limpiar la fecha
     let fechaProg = d['FECHA DE PROGRAMACIÓN'] || d['FECHA DE PROGRAMACION'] || d['Fecha de Programación'] || d['FECHA PROG.'] || '';
 
-    // Si viene como objeto Date de JS, formatearlo en un string legible
     if (fechaProg instanceof Date) {
       fechaProg = fechaProg.toLocaleString('es-EC', { timeZone: 'America/Guayaquil' });
     }
