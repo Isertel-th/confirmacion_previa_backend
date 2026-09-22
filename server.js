@@ -23,9 +23,9 @@ if (!fs.existsSync(carpetaDocs)) fs.mkdirSync(carpetaDocs, { recursive: true });
 
 function leerExcel(ruta) {
   if (!fs.existsSync(ruta)) return [];
-  const libro = xlsx.readFile(ruta);
+  const libro = xlsx.readFile(ruta, { cellDates: true, dateNF: 'yyyy-mm-dd hh:mm:ss' });
   const hoja = libro.Sheets[libro.SheetNames[0]];
-  return xlsx.utils.sheet_to_json(hoja);
+  return xlsx.utils.sheet_to_json(hoja, { raw: false });
 }
 
 function guardarExcel(ruta, datos) {
@@ -71,16 +71,16 @@ app.get('/api/datos', (req, res) => {
   let datos = leerExcel(PATH_BASE);
   
   datos = datos.map((d, i) => {
-    // Lectura flexible para CLIENTE
+    // Normalizar cliente
     const cliente = d.CLIENTE || d.Cliente || d.cliente || d['CLIENTE'] || '';
 
-    // Lectura flexible para FECHA DE PROGRAMACIÓN
-    const fechaProg = d['FECHA DE PROGRAMACIÓN'] 
-      || d['FECHA DE PROGRAMACION'] 
-      || d['Fecha de Programación'] 
-      || d['FECHA PROG.'] 
-      || d['Fecha Prog.'] 
-      || '';
+    // Normalizar y limpiar la fecha
+    let fechaProg = d['FECHA DE PROGRAMACIÓN'] || d['FECHA DE PROGRAMACION'] || d['Fecha de Programación'] || d['FECHA PROG.'] || '';
+
+    // Si viene como objeto Date de JS, formatearlo en un string legible
+    if (fechaProg instanceof Date) {
+      fechaProg = fechaProg.toLocaleString('es-EC', { timeZone: 'America/Guayaquil' });
+    }
 
     return {
       TAREA: d.TAREA || d.Tarea || '',
