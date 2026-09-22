@@ -70,26 +70,33 @@ app.get('/api/datos', (req, res) => {
   const { perfil, horaInicio } = req.query;
   let datos = leerExcel(PATH_BASE);
   
-  datos = datos.map((d, i) => ({
-    TAREA: d.TAREA,
-    ORDEN: d.ORDEN,
-    CIUDAD: d.CIUDAD,
-    TECNICO: d.TECNICO,
-    CONTRATO: d.CONTRATO,
-    Cliente: d.Cliente,
-    'Fecha de programación desde': d['Fecha de programación desde'],
-    Operador: d.Operador || '',
-    Observacion: d.Observacion || 'Pendiente',
-    lote: Math.floor(i / 50),
-    color: asignarColor(Math.floor(i / 50))
-  }));
+  datos = datos.map((d, i) => {
+    // Normalizar la lectura de la fecha de programación y del cliente
+    const fechaProg = d['FECHA DE PROGRAMACIÓN'] || d['FECHA DE PROGRAMACION'] || d['Fecha de Programación'] || d['FECHA PROG.'] || '';
+    const cliente = d.CLIENTE || d.Cliente || d.cliente || '';
+
+    return {
+      TAREA: d.TAREA || '',
+      ORDEN: d.ORDEN || '',
+      CIUDAD: d.CIUDAD || '',
+      TECNICO: d.TECNICO || d.TÉCNICO || '',
+      CONTRATO: d.CONTRATO || '',
+      CLIENTE: cliente,
+      'FECHA DE PROGRAMACIÓN': fechaProg,
+      Operador: d.OPERADOR || d.Operador || '',
+      Observacion: d.OBSERVACION || d.Observacion || 'Pendiente',
+      lote: Math.floor(i / 50),
+      color: asignarColor(Math.floor(i / 50))
+    };
+  });
 
   if (perfil !== 'admin' && horaInicio) {
     const inicio = new Date(horaInicio);
     const corte = new Date(inicio.getTime() - 2 * 60 * 60 * 1000);
     datos = datos.filter(d => {
-      if (!d['Fecha de programación desde']) return true;
-      return new Date(d['Fecha de programación desde']) >= corte;
+      const fecha = d['FECHA DE PROGRAMACIÓN'];
+      if (!fecha) return true;
+      return new Date(fecha) >= corte;
     });
   }
 
