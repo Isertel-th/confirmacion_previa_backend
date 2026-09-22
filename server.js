@@ -71,16 +71,23 @@ app.get('/api/datos', (req, res) => {
   let datos = leerExcel(PATH_BASE);
   
   datos = datos.map((d, i) => {
-    // Normalizar la lectura de la fecha de programación y del cliente
-    const fechaProg = d['FECHA DE PROGRAMACIÓN'] || d['FECHA DE PROGRAMACION'] || d['Fecha de Programación'] || d['FECHA PROG.'] || '';
-    const cliente = d.CLIENTE || d.Cliente || d.cliente || '';
+    // Lectura flexible para CLIENTE
+    const cliente = d.CLIENTE || d.Cliente || d.cliente || d['CLIENTE'] || '';
+
+    // Lectura flexible para FECHA DE PROGRAMACIÓN
+    const fechaProg = d['FECHA DE PROGRAMACIÓN'] 
+      || d['FECHA DE PROGRAMACION'] 
+      || d['Fecha de Programación'] 
+      || d['FECHA PROG.'] 
+      || d['Fecha Prog.'] 
+      || '';
 
     return {
-      TAREA: d.TAREA || '',
-      ORDEN: d.ORDEN || '',
-      CIUDAD: d.CIUDAD || '',
-      TECNICO: d.TECNICO || d.TÉCNICO || '',
-      CONTRATO: d.CONTRATO || '',
+      TAREA: d.TAREA || d.Tarea || '',
+      ORDEN: d.ORDEN || d.Orden || '',
+      CIUDAD: d.CIUDAD || d.Ciudad || '',
+      TECNICO: d.TECNICO || d.TÉCNICO || d.Técnico || '',
+      CONTRATO: d.CONTRATO || d.Contrato || '',
       CLIENTE: cliente,
       'FECHA DE PROGRAMACIÓN': fechaProg,
       Operador: d.OPERADOR || d.Operador || '',
