@@ -4,20 +4,16 @@ const xlsx = require('xlsx');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
-
 const app = express();
 const PORT = process.env.PORT || 3001;
-
 app.use(cors());
 app.use(express.json());
 
-// Rutas de archivos — en Render se guardan en el disco persistente
 const PATH_BASE = path.join(__dirname, 'docs', 'base_datos.xlsx');
 const PATH_USERS = path.join(__dirname, 'docs', 'usuarios.xlsx');
 const PATH_OP = path.join(__dirname, 'docs', 'operadores.xlsx');
 const PATH_OBS = path.join(__dirname, 'docs', 'observaciones.xlsx');
 
-// Asegurar que la carpeta docs exista
 const carpetaDocs = path.join(__dirname, 'docs');
 if (!fs.existsSync(carpetaDocs)) fs.mkdirSync(carpetaDocs, { recursive: true });
 
@@ -35,7 +31,6 @@ function guardarExcel(ruta, datos) {
   xlsx.writeFile(libro, ruta);
 }
 
-// Login
 app.post('/api/login', (req, res) => {
   const { usuario, clave } = req.body;
   const usuarios = leerExcel(PATH_USERS);
@@ -49,7 +44,6 @@ app.post('/api/login', (req, res) => {
   }
 });
 
-// Listas
 app.get('/api/listas', (req, res) => {
   const operadores = leerExcel(PATH_OP).map(o => o.OPERADORES).filter(Boolean);
   const observaciones = leerExcel(PATH_OBS).map(o => o.OBSERVACION).filter(Boolean);
@@ -65,7 +59,7 @@ function asignarColor(indice) {
   return colores[indice % colores.length];
 }
 
-// Obtener datos
+// Obtener datos — CORREGIDO con los nombres EXACTOS del Excel
 app.get('/api/datos', (req, res) => {
   const { perfil, horaInicio } = req.query;
   let datos = leerExcel(PATH_BASE);
@@ -76,8 +70,8 @@ app.get('/api/datos', (req, res) => {
     CIUDAD: d.CIUDAD,
     TECNICO: d.TECNICO,
     CONTRATO: d.CONTRATO,
-    Cliente: d.Cliente,
-    'Fecha de programación desde': d['Fecha de programación desde'],
+    Cliente: d.Cliente,                          // ✅ Igual que tu Excel columna F
+    'Fecha de programación': d['Fecha de programación'], // ✅ Igual que tu Excel columna G
     Operador: d.Operador || '',
     Observacion: d.Observacion || 'Pendiente',
     lote: Math.floor(i / 50),
@@ -88,15 +82,14 @@ app.get('/api/datos', (req, res) => {
     const inicio = new Date(horaInicio);
     const corte = new Date(inicio.getTime() - 2 * 60 * 60 * 1000);
     datos = datos.filter(d => {
-      if (!d['Fecha de programación desde']) return true;
-      return new Date(d['Fecha de programación desde']) >= corte;
+      if (!d['Fecha de programación']) return true;
+      return new Date(d['Fecha de programación']) >= corte;
     });
   }
-
+  
   res.json(datos);
 });
 
-// Editar registro
 app.put('/api/editar', (req, res) => {
   const { tarea, operador, observacion } = req.body;
   let datos = leerExcel(PATH_BASE);
@@ -105,15 +98,12 @@ app.put('/api/editar', (req, res) => {
   if (indice === -1) {
     return res.status(404).json({ mensaje: 'Tarea no encontrada' });
   }
-
   datos[indice].Operador = operador;
   datos[indice].Observacion = observacion;
-
   guardarExcel(PATH_BASE, datos);
   res.json({ ok: true, mensaje: 'Guardado correctamente' });
 });
 
-// Descargar Excel
 app.get('/api/descargar', (req, res) => {
   if (!fs.existsSync(PATH_BASE)) {
     return res.status(404).json({ mensaje: 'Archivo no encontrado' });
@@ -121,7 +111,6 @@ app.get('/api/descargar', (req, res) => {
   res.download(PATH_BASE, 'base_datos_actualizada.xlsx');
 });
 
-// Subir y reemplazar Excel — SIN NECESIDAD DE GIT
 const carga = multer({ storage: multer.memoryStorage() });
 app.post('/api/cargar-excel', carga.single('archivo'), (req, res) => {
   const { tipo } = req.body;
@@ -135,7 +124,6 @@ app.post('/api/cargar-excel', carga.single('archivo'), (req, res) => {
   if (!ruta) {
     return res.status(400).json({ mensaje: 'Tipo de archivo no válido' });
   }
-
   try {
     const libro = xlsx.read(req.file.buffer);
     const hoja = libro.Sheets[libro.SheetNames[0]];
