@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const XLSX = require('xlsx');
+const xlsx = require('xlsx');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
@@ -10,120 +10,134 @@ const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
-app.use('/docs', express.static(path.join(__dirname, 'docs')));
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, './docs/'),
-  filename: (req, file, cb) => cb(null, file.originalname)
-});
-const upload = multer({ storage });
 
 // Rutas de archivos
-const PATH_BASE = './docs/base_datos.xlsx';
-const PATH_OP = './docs/operadores.xlsx';
-const PATH_OBS = './docs/observaciones.xlsx';
-const PATH_USERS = './docs/usuarios.xlsx';
-
-// Colores por lote
-const COLORES = ['#e3f2fd', '#c8e6c9', '#fff9c4', '#f8bbd9', '#e1bee8', '#d7ccc8'];
+const PATH_BASE = path.join(__dirname, 'docs', 'base_datos.xlsx');
+const PATH_USERS = path.join(__dirname, 'docs', 'usuarios.xlsx');
+const PATH_OP = path.join(__dirname, 'docs', 'operadores.xlsx');
+const PATH_OBS = path.join(__dirname, 'docs', 'observaciones.xlsx');
 
 // Leer Excel
-const leerExcel = (ruta) => {
+function leerExcel(ruta) {
   if (!fs.existsSync(ruta)) return [];
-  const wb = XLSX.readFile(ruta);
-  const hoja = wb.Sheets[wb.SheetNames[0]];
-  return XLSX.utils.sheet_to_json(hoja);
-};
+  const libro = xlsx.readFile(ruta);
+  const hoja = libro.Sheets[libro.SheetNames[0]];
+  return xlsx.utils.sheet_to_json(hoja);
+}
 
-// Guardar Excel
-const guardarExcel = (ruta, datos) => {
-  const hoja = XLSX.utils.json_to_sheet(datos);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, hoja, 'Datos');
-  XLSX.writeFile(wb, ruta);
-};
-
-// Asignar colores por lote según hora de ingreso
-const asignarColores = (registros, horaInicioSistema) => {
-  return registros.map((reg, idx) => {
-    const horaReg = new Date(reg.fecha_ingreso || horaInicioSistema);
-    const horasTranscurridas = (horaReg - horaInicioSistema) / (1000 * 60 * 60);
-    const lote = Math.floor(horasTranscurridas / 2);
-    return { ...reg, color: COLORES[lote % COLORES.length], lote };
-  });
-};
+// Guardar Excel — mantiene TODO intacto
+function guardarExcel(ruta, datos) {
+  const hoja = xlsx.utils.json_to_sheet(datos);
+  const libro = xlsx.utils.book_new();
+  xlsx.utils.book_append_sheet(libro, hoja, 'Hoja1');
+  xlsx.writeFile(libro, ruta);
+}
 
 // Login
 app.post('/api/login', (req, res) => {
   const { usuario, clave } = req.body;
   const usuarios = leerExcel(PATH_USERS);
   const encontrado = usuarios.find(u => 
-    u.usuario === usuario && u.clave === clave
+    u.USERNAME === usuario && u.CONTRASEÑA === clave
   );
   if (encontrado) {
-    res.json({ ok: true, perfil: encontrado.perfil, nombre: encontrado.usuario });
+    res.json({ ok: true, perfil: encontrado.ROL, nombre: encontrado.USERNAME });
   } else {
     res.status(401).json({ ok: false, mensaje: 'Credenciales incorrectas' });
   }
 });
 
-// Obtener datos según perfil y tiempo
+// Listas desplegables
+app.get('/api/listas', (req, res) => {
+  const operadores = leerExcel(PATH_OP).map(o => o.OPERADORES).filter(Boolean);
+  const observaciones = leerExcel(PATH_OBS).map(o => o.OBSERVACION).filter(Boolean);
+  if (!observaciones.includes('Pendiente')) observaciones.unshift('Pendiente');
+  res.json({ operadores, observaciones });
+});
+
+// Colores por lote
+function asignarColor(indice) {
+  const colores = [
+    '#e3f2fd', '#c8e6c9', '#fff9c4',
+    '#f8bbd9', '#e1bee8', '#d7ccc8'
+  ];
+  return colores[indice % colores.length];
+}
+
+// Obtener datos — solo columnas A a I
 app.get('/api/datos', (req, res) => {
   const { perfil, horaInicio } = req.query;
   let datos = leerExcel(PATH_BASE);
-  const horaInicioSistema = new Date(horaInicio || Date.now());
+  
+  datos = datos.map((d, i) => ({
+    TAREA: d.TAREA,
+    ORDEN: d.ORDEN,
+    CIUDAD: d.CIUDAD,
+    TECNICO: d.TECNICO,
+    CONTRATO: d.CONTRATO,
+    Cliente: d.Cliente,
+    'Fecha de programación desde': d['Fecha de programación desde'],
+    Operador: d.Operador || '',
+    Observacion: d.Observacion || 'Pendiente',
+    lote: Math.floor(i / 50),
+    color: asignarColor(Math.floor(i / 50))
+  }));
 
-  // Asignar fecha_ingreso si no existe
-  datos = datos.map(d => {
-    if (!d.fecha_ingreso) {
-      d.fecha_ingreso = horaInicioSistema.toISOString();
-    }
-    return d;
-  });
-
-  // Filtrar: user solo ve últimos 2h; admin ve todo
-  if (perfil !== 'admin') {
-    const ahora = new Date();
-    const limite = new Date(ahora.getTime() - 2 * 60 * 60 * 1000);
-    datos = datos.filter(d => new Date(d.fecha_ingreso) >= limite);
+  // Filtrar operadores: últimas 2 horas
+  if (perfil !== 'admin' && horaInicio) {
+    const inicio = new Date(horaInicio);
+    const corte = new Date(inicio.getTime() - 2 * 60 * 60 * 1000);
+    datos = datos.filter(d => {
+      if (!d['Fecha de programación desde']) return true;
+      return new Date(d['Fecha de programación desde']) >= corte;
+    });
   }
 
-  // Sin tareas repetidas
-  const vistos = new Set();
-  const unicos = datos.filter(d => {
-    if (vistos.has(d.tarea)) return false;
-    vistos.add(d.tarea);
-    return true;
-  });
-
-  res.json(asignarColores(unicos, horaInicioSistema));
-});
-
-// Listas desplegables
-app.get('/api/listas', (req, res) => {
-  res.json({
-    operadores: leerExcel(PATH_OP).map(o => o.operador),
-    observaciones: leerExcel(PATH_OBS).map(o => o.observacion)
-  });
+  res.json(datos);
 });
 
 // Editar registro
 app.put('/api/editar', (req, res) => {
   const { tarea, operador, observacion } = req.body;
-  const datos = leerExcel(PATH_BASE);
-  const idx = datos.findIndex(d => d.tarea === tarea);
-  if (idx !== -1) {
-    datos[idx].operador = operador;
-    datos[idx].observacion = observacion;
-    guardarExcel(PATH_BASE, datos);
-    res.json({ ok: true });
-  } else {
-    res.status(404).json({ ok: false });
+  let datos = leerExcel(PATH_BASE);
+  
+  const indice = datos.findIndex(d => d.TAREA === tarea);
+  if (indice === -1) {
+    return res.status(404).json({ mensaje: 'Tarea no encontrada' });
   }
+
+  datos[indice].Operador = operador;
+  datos[indice].Observacion = observacion;
+
+  guardarExcel(PATH_BASE, datos);
+  res.json({ ok: true, mensaje: 'Guardado correctamente' });
 });
 
-// Subir Excel (solo admin)
-app.post('/api/cargar-excel', upload.single('archivo'), (req, res) => {
+// Descargar Excel completo
+app.get('/api/descargar', (req, res) => {
+  if (!fs.existsSync(PATH_BASE)) {
+    return res.status(404).json({ mensaje: 'Archivo no encontrado' });
+  }
+  res.download(PATH_BASE, 'base_datos_actualizada.xlsx');
+});
+
+// Subir Excel
+const carga = multer({ storage: multer.memoryStorage() });
+app.post('/api/cargar-excel', carga.single('archivo'), (req, res) => {
+  const { tipo } = req.body;
+  const rutas = {
+    base: PATH_BASE,
+    operadores: PATH_OP,
+    observaciones: PATH_OBS
+  };
+  const ruta = rutas[tipo];
+  if (!ruta) return res.status(400).json({ mensaje: 'Tipo inválido' });
+
+  const libro = xlsx.read(req.file.buffer);
+  const hoja = libro.Sheets[libro.SheetNames[0]];
+  const datos = xlsx.utils.sheet_to_json(hoja);
+  guardarExcel(ruta, datos);
+  
   res.json({ ok: true, mensaje: 'Archivo cargado correctamente' });
 });
 
