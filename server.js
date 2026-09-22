@@ -11,7 +11,6 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-// Rutas de archivos en el servidor (almacenamiento persistente/local)
 const PATH_BASE = path.join(__dirname, 'docs', 'base_datos.xlsx');
 const PATH_USERS = path.join(__dirname, 'docs', 'usuarios.xlsx');
 const PATH_OBS = path.join(__dirname, 'docs', 'observaciones.xlsx');
@@ -60,24 +59,19 @@ app.get('/api/listas', (req, res) => {
   res.json({ observaciones });
 });
 
-// Obtener datos de la base cargada por Admin
+// Obtener datos
 app.get('/api/datos', (req, res) => {
   const { perfil, horaInicio } = req.query;
   let datos = leerExcel(PATH_BASE);
 
-  if (!datos || datos.length === 0) {
-    return res.json([]);
-  }
+  if (!datos || datos.length === 0) return res.json([]);
   
   datos = datos.map(d => {
     let fechaProg = d['FECHA DE PROGRAMACIÓN'] || d['FECHA DE PROGRAMACION'] || d['FECHA PROG.'] || '';
     if (fechaProg instanceof Date) {
       fechaProg = fechaProg.toLocaleString('es-EC', { timeZone: 'America/Guayaquil' });
     }
-    return {
-      ...d,
-      'FECHA DE PROGRAMACIÓN': fechaProg
-    };
+    return { ...d, 'FECHA DE PROGRAMACIÓN': fechaProg };
   });
 
   if (perfil !== 'admin' && horaInicio) {
@@ -94,7 +88,7 @@ app.get('/api/datos', (req, res) => {
   res.json(datos);
 });
 
-// Editar registro (Guardar gestión)
+// Editar registro
 app.put('/api/editar', (req, res) => {
   const { tarea, operador, observacion, fechaRegistro } = req.body;
   let datos = leerExcel(PATH_BASE);
@@ -107,19 +101,53 @@ app.put('/api/editar', (req, res) => {
   datos[indice].Operador = operador;
   datos[indice].Observacion = observacion;
   datos[indice]['Fecha de Registro'] = fechaRegistro;
-  datos[indice].NuevoRegistro = false; // Quita la etiqueta roja al gestionarse
+  datos[indice].NuevoRegistro = false;
 
   guardarExcel(PATH_BASE, datos);
   res.json({ ok: true, mensaje: 'Guardado correctamente' });
 });
 
-// Descargar Excel
+// Descargar Excel Completo adaptado (Pendientes y Gestionados)
 app.get('/api/descargar', (req, res) => {
-  if (!fs.existsSync(PATH_BASE)) return res.status(404).json({ mensaje: 'Aún no se ha cargado ninguna base de datos.' });
-  res.download(PATH_BASE, 'base_datos_actualizada.xlsx');
+  if (!fs.existsSync(PATH_BASE)) {
+    return res.status(404).json({ mensaje: 'Aún no existe una base de datos para descargar.' });
+  }
+  let datos = leerExcel(PATH_BASE);
+
+  const datosExportar = datos.map(d => ({
+    TAREA: d.TAREA || '',
+    ORDEN: d.ORDEN || '',
+    CIUDAD: d.CIUDAD || '',
+    TECNICO: d.TECNICO || d['TÉCNICO'] || '',
+    CONTRATO: d.CONTRATO || '',
+    CLIENTE: d.CLIENTE || '',
+    'FECHA DE PROGRAMACIÓN': d['FECHA DE PROGRAMACIÓN'] || d['FECHA DE PROGRAMACION'] || '',
+    Operador: d.Operador || '',
+    'Fecha de Registro': d['Fecha de Registro'] || '',
+    Observacion: d.Observacion || 'Pendiente'
+  }));
+
+  const hoja = xlsx.utils.json_to_sheet(datosExportar);
+  const libro = xlsx.utils.book_new();
+  xlsx.utils.book_append_sheet(libro, hoja, 'Base_Gestion');
+
+  const buffer = xlsx.write(libro, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename=Base_Gestion_Completa.xlsx');
+  res.send(buffer);
 });
 
-// Subir Excel Inteligente (Administrador)
+// Vaciar base a cero
+app.post('/api/reset-base', (req, res) => {
+  try {
+    if (fs.existsSync(PATH_BASE)) fs.unlinkSync(PATH_BASE);
+    res.json({ ok: true, mensaje: 'Base de datos vaciada por completo.' });
+  } catch (error) {
+    res.status(500).json({ mensaje: 'Error al vaciar base: ' + error.message });
+  }
+});
+
+// Cargar/Integrar Excel Inteligente
 const carga = multer({ storage: multer.memoryStorage() });
 app.post('/api/cargar-excel', carga.single('archivo'), (req, res) => {
   const { tipo } = req.body;
@@ -134,67 +162,55 @@ app.post('/api/cargar-excel', carga.single('archivo'), (req, res) => {
 
     if (tipo === 'base') {
       let baseActual = fs.existsSync(PATH_BASE) ? leerExcel(PATH_BASE) : [];
-      
-      // Desmarcar etiqueta "nuevo registro" en datos viejos
       baseActual = baseActual.map(d => ({ ...d, NuevoRegistro: false }));
-      
-      let agregados = 0;
 
-      if (baseActual.length === 0) {
-        // Primera carga completa de base por el Admin
-        baseActual = datosNuevos.map(nuevo => {
-          const norm = {};
-          Object.keys(nuevo).forEach(k => norm[k.trim().toUpperCase()] = nuevo[k]);
-          agregados++;
-          return {
-            TAREA: norm['TAREA'] || '',
+      let nuevosPendientes = 0;
+      let recuperadosGestionados = 0;
+
+      datosNuevos.forEach(nuevo => {
+        const norm = {};
+        Object.keys(nuevo).forEach(k => norm[k.trim().toUpperCase()] = nuevo[k]);
+
+        const tarea = norm['TAREA'] || nuevo['TAREA'] || nuevo['Tarea'];
+        if (!tarea) return;
+
+        // Leer campos de gestión por si vienen pre-llenados desde un Excel descargado
+        const obsSubida = (nuevo['Observacion'] || nuevo['OBSERVACION'] || norm['OBSERVACION'] || '').toString().trim();
+        const opSubido = (nuevo['Operador'] || nuevo['OPERADOR'] || norm['OPERADOR'] || '').toString().trim();
+        const fechaRegSubida = (nuevo['Fecha de Registro'] || nuevo['FECHA DE REGISTRO'] || norm['FECHA DE REGISTRO'] || '').toString().trim();
+
+        const existe = baseActual.find(b => String(b.TAREA).trim() === String(tarea).trim());
+
+        if (!existe) {
+          const estaGestionado = obsSubida !== '' && obsSubida.toLowerCase() !== 'pendiente';
+
+          baseActual.push({
+            TAREA: tarea,
             ORDEN: norm['ORDEN'] || '',
             CIUDAD: norm['CIUDAD'] || '',
             TECNICO: norm['TECNICO'] || norm['TÉCNICO'] || '',
             CONTRATO: norm['CONTRATO'] || '',
             CLIENTE: norm['CLIENTE'] || '',
             'FECHA DE PROGRAMACIÓN': norm['FECHA DE PROGRAMACIÓN'] || norm['FECHA DE PROGRAMACION'] || norm['FECHA PROG.'] || '',
-            Operador: '',
-            Observacion: 'Pendiente',
-            'Fecha de Registro': '',
-            NuevoRegistro: true
-          };
-        });
-      } else {
-        // Carga subsecuente: Fusionar evitando duplicados por TAREA
-        datosNuevos.forEach(nuevo => {
-          const norm = {};
-          Object.keys(nuevo).forEach(k => norm[k.trim().toUpperCase()] = nuevo[k]);
-          
-          const tarea = norm['TAREA'];
-          if (!tarea) return;
+            Operador: opSubido,
+            Observacion: obsSubida || 'Pendiente',
+            'Fecha de Registro': fechaRegSubida,
+            NuevoRegistro: !estaGestionado
+          });
 
-          const existe = baseActual.find(b => String(b.TAREA).trim() === String(tarea).trim());
-          
-          if (!existe) {
-            baseActual.push({
-              TAREA: tarea,
-              ORDEN: norm['ORDEN'] || '',
-              CIUDAD: norm['CIUDAD'] || '',
-              TECNICO: norm['TECNICO'] || norm['TÉCNICO'] || '',
-              CONTRATO: norm['CONTRATO'] || '',
-              CLIENTE: norm['CLIENTE'] || '',
-              'FECHA DE PROGRAMACIÓN': norm['FECHA DE PROGRAMACIÓN'] || norm['FECHA DE PROGRAMACION'] || norm['FECHA PROG.'] || '',
-              Operador: '',
-              Observacion: 'Pendiente',
-              'Fecha de Registro': '',
-              NuevoRegistro: true
-            });
-            agregados++;
-          }
-        });
-      }
+          if (estaGestionado) recuperadosGestionados++;
+          else nuevosPendientes++;
+        }
+      });
 
       guardarExcel(PATH_BASE, baseActual);
-      res.json({ ok: true, mensaje: `Base cargada. Se añadieron ${agregados} tareas nuevas como pendientes.` });
+      res.json({ 
+        ok: true, 
+        mensaje: `Archivo procesado. Nuevos pendientes: ${nuevosPendientes}. Gestionados cargados/recuperados: ${recuperadosGestionados}.` 
+      });
     } else {
       guardarExcel(PATH_OBS, datosNuevos);
-      res.json({ ok: true, mensaje: `Lista de observaciones actualizada correctamente.` });
+      res.json({ ok: true, mensaje: 'Lista de observaciones actualizada.' });
     }
   } catch (error) {
     res.status(500).json({ mensaje: 'Error al procesar el archivo: ' + error.message });
