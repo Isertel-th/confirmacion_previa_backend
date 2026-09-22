@@ -25,7 +25,7 @@ function leerExcel(ruta) {
   if (!fs.existsSync(ruta)) return [];
   const libro = xlsx.readFile(ruta, { cellDates: true, dateNF: 'yyyy-mm-dd hh:mm:ss' });
   const hoja = libro.Sheets[libro.SheetNames[0]];
-  return xlsx.utils.sheet_to_json(hoja, { raw: false });
+  return xlsx.utils.sheet_to_json(hoja, { raw: false, defval: '' });
 }
 
 function guardarExcel(ruta, datos) {
@@ -71,25 +71,28 @@ app.get('/api/datos', (req, res) => {
   let datos = leerExcel(PATH_BASE);
   
   datos = datos.map((d, i) => {
-    // Garantizar obtención de CLIENTE
-    const cliente = d.CLIENTE || d.Cliente || d.cliente || '';
+    // Normalizar llaves para ignorar espacios extra en los nombres de cabecera
+    const normalizado = {};
+    Object.keys(d).forEach(key => {
+      normalizado[key.trim().toUpperCase()] = d[key];
+    });
 
-    let fechaProg = d['FECHA DE PROGRAMACIÓN'] || d['FECHA DE PROGRAMACION'] || d['Fecha de Programación'] || d['FECHA PROG.'] || '';
+    let fechaProg = normalizado['FECHA DE PROGRAMACIÓN'] || normalizado['FECHA DE PROGRAMACION'] || normalizado['FECHA PROG.'] || '';
 
     if (fechaProg instanceof Date) {
       fechaProg = fechaProg.toLocaleString('es-EC', { timeZone: 'America/Guayaquil' });
     }
 
     return {
-      TAREA: d.TAREA || d.Tarea || '',
-      ORDEN: d.ORDEN || d.Orden || '',
-      CIUDAD: d.CIUDAD || d.Ciudad || '',
-      TECNICO: d.TECNICO || d.TÉCNICO || d.Técnico || '',
-      CONTRATO: d.CONTRATO || d.Contrato || '',
-      CLIENTE: cliente,
+      TAREA: normalizado['TAREA'] || '',
+      ORDEN: normalizado['ORDEN'] || '',
+      CIUDAD: normalizado['CIUDAD'] || '',
+      TECNICO: normalizado['TECNICO'] || normalizado['TÉCNICO'] || '',
+      CONTRATO: normalizado['CONTRATO'] || '',
+      CLIENTE: normalizado['CLIENTE'] || '', // Mantiene el campo como vacío '' si en Excel está en blanco
       'FECHA DE PROGRAMACIÓN': fechaProg,
-      Operador: d.OPERADOR || d.Operador || '',
-      Observacion: d.OBSERVACION || d.Observacion || 'Pendiente',
+      Operador: normalizado['OPERADOR'] || '',
+      Observacion: normalizado['OBSERVACION'] || 'Pendiente',
       lote: Math.floor(i / 50),
       color: asignarColor(Math.floor(i / 50))
     };
