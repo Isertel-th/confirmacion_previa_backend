@@ -52,10 +52,10 @@ app.post('/api/login', (req, res) => {
   }
 });
 
-// Listas de observaciones
+// Listas de observaciones (Se remueve 'Pendiente' del desplegable)
 app.get('/api/listas', (req, res) => {
   let observaciones = leerExcel(PATH_OBS).map(o => o.OBSERVACION).filter(Boolean);
-  if (!observaciones.includes('Pendiente')) observaciones.unshift('Pendiente');
+  observaciones = observaciones.filter(obs => obs.toLowerCase() !== 'pendiente');
   res.json({ observaciones });
 });
 
@@ -76,7 +76,8 @@ app.get('/api/datos', (req, res) => {
 
   if (perfil !== 'admin' && horaInicio) {
     const inicio = new Date(horaInicio);
-    const corte = new Date(inicio.getTime() - 2 * 60 * 60 * 1000);
+    // Margen ajustado a 48 horas (2 días) para que la información persista más tiempo cargada
+    const corte = new Date(inicio.getTime() - 48 * 60 * 60 * 1000);
     datos = datos.filter(d => {
       const fecha = d['FECHA DE PROGRAMACIÓN'];
       if (!fecha) return true;
@@ -88,26 +89,32 @@ app.get('/api/datos', (req, res) => {
   res.json(datos);
 });
 
-// Editar registro
+// Editar múltiples registros o uno solo
 app.put('/api/editar', (req, res) => {
-  const { tarea, operador, observacion, fechaRegistro } = req.body;
+  const items = Array.isArray(req.body) ? req.body : [req.body];
   let datos = leerExcel(PATH_BASE);
-  
-  const indice = datos.findIndex(d => String(d.TAREA).trim() === String(tarea).trim());
-  if (indice === -1) {
-    return res.status(404).json({ mensaje: 'Tarea no encontrada' });
-  }
+  let editados = 0;
 
-  datos[indice].Operador = operador;
-  datos[indice].Observacion = observacion;
-  datos[indice]['Fecha de Registro'] = fechaRegistro;
-  datos[indice].NuevoRegistro = false;
+  items.forEach(item => {
+    const { tarea, operador, observacion, fechaRegistro } = item;
+    if (!observacion || observacion.toLowerCase() === 'pendiente') return;
+
+    const indice = datos.findIndex(d => String(d.TAREA).trim() === String(tarea).trim());
+    if (indice !== -1) {
+      // Si la tarea ya estaba gestionada, no permite sobreescritura si se envia algo invalido
+      datos[indice].Operador = operador;
+      datos[indice].Observacion = observacion;
+      datos[indice]['Fecha de Registro'] = fechaRegistro;
+      datos[indice].NuevoRegistro = false;
+      editados++;
+    }
+  });
 
   guardarExcel(PATH_BASE, datos);
-  res.json({ ok: true, mensaje: 'Guardado correctamente' });
+  res.json({ ok: true, mensaje: `Se guardaron ${editados} registros correctamente.` });
 });
 
-// Descargar Excel Completo adaptado (Pendientes y Gestionados)
+// Descargar Excel Completo
 app.get('/api/descargar', (req, res) => {
   if (!fs.existsSync(PATH_BASE)) {
     return res.status(404).json({ mensaje: 'Aún no existe una base de datos para descargar.' });
@@ -174,7 +181,6 @@ app.post('/api/cargar-excel', carga.single('archivo'), (req, res) => {
         const tarea = norm['TAREA'] || nuevo['TAREA'] || nuevo['Tarea'];
         if (!tarea) return;
 
-        // Leer campos de gestión por si vienen pre-llenados desde un Excel descargado
         const obsSubida = (nuevo['Observacion'] || nuevo['OBSERVACION'] || norm['OBSERVACION'] || '').toString().trim();
         const opSubido = (nuevo['Operador'] || nuevo['OPERADOR'] || norm['OPERADOR'] || '').toString().trim();
         const fechaRegSubida = (nuevo['Fecha de Registro'] || nuevo['FECHA DE REGISTRO'] || norm['FECHA DE REGISTRO'] || '').toString().trim();
