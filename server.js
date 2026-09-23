@@ -162,10 +162,11 @@ app.post('/api/cargar-excel', carga.single('archivo'), (req, res) => {
     return res.status(400).json({ mensaje: 'Tipo de archivo no válido' });
   }
 
-  try {
-    const libro = xlsx.read(req.file.buffer);
+try {
+    // Se agregan las opciones cellDates y raw: false para leer fechas correctamente
+    const libro = xlsx.read(req.file.buffer, { cellDates: true, dateNF: 'yyyy-mm-dd hh:mm:ss' });
     const hoja = libro.Sheets[libro.SheetNames[0]];
-    const datosNuevos = xlsx.utils.sheet_to_json(hoja, { defval: '' });
+    const datosNuevos = xlsx.utils.sheet_to_json(hoja, { raw: false, defval: '' });
 
     if (tipo === 'base') {
       let baseActual = fs.existsSync(PATH_BASE) ? leerExcel(PATH_BASE) : [];
