@@ -13,19 +13,19 @@ app.use(cors());
 app.use(express.json());
 
 // -------------------------------------------------------------
-// CONFIGURACIÓN DE GOOGLE DRIVE API
+// CONFIGURACIÓN DE GOOGLE DRIVE (RENDER / LOCAL)
 // -------------------------------------------------------------
-const auth = new google.auth.GoogleAuth({
-  keyFile: path.join(__dirname, 'credentials.json'), // Tu archivo de credenciales descargado
-  scopes: ['https://www.googleapis.com/auth/drive'],
-});
+const authConfig = process.env.GOOGLE_CREDENTIALS
+  ? { credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS), scopes: ['https://www.googleapis.com/auth/drive'] }
+  : { keyFile: path.join(__dirname, 'credentials.json'), scopes: ['https://www.googleapis.com/auth/drive'] };
 
+const auth = new google.auth.GoogleAuth(authConfig);
 const drive = google.drive({ version: 'v3', auth });
 
-// ID Real de tu Excel en Google Drive
+// ID Real de tu archivo Excel en Google Drive
 const FILE_ID_BASE = '1Y2p2S6NXHIfAutb_PsqJAFvvyqHSGz62';
 
-// Archivos secundarios locales (o puedes usarlos igual)
+// Archivos locales para usuarios y observaciones
 const PATH_USERS = path.join(__dirname, 'docs', 'usuarios.xlsx');
 const PATH_OBS = path.join(__dirname, 'docs', 'observaciones.xlsx');
 
@@ -82,7 +82,11 @@ async function guardarExcelDrive(fileId, datos) {
   }
 }
 
-// Login
+// -------------------------------------------------------------
+// ENDPOINTS Y RUTAS DE LA API
+// -------------------------------------------------------------
+
+// Login de usuarios
 app.post('/api/login', (req, res) => {
   const { usuario, clave } = req.body;
   const usuarios = leerExcelLocal(PATH_USERS);
@@ -106,86 +110,99 @@ app.get('/api/listas', (req, res) => {
 
 // Obtener datos desde Google Drive
 app.get('/api/datos', async (req, res) => {
-  const { perfil, horaInicio } = req.query;
-  let datos = await leerExcelDrive(FILE_ID_BASE);
+  try {
+    const { perfil, horaInicio } = req.query;
+    let datos = await leerExcelDrive(FILE_ID_BASE);
 
-  if (!datos || datos.length === 0) return res.json([]);
-  
-  datos = datos.map(d => {
-    let fechaProg = d['FECHA DE PROGRAMACIÓN'] || d['FECHA DE PROGRAMACION'] || d['FECHA PROG.'] || '';
-    if (fechaProg instanceof Date) {
-      fechaProg = fechaProg.toLocaleString('es-EC', { timeZone: 'America/Guayaquil' });
-    }
-    return { ...d, 'FECHA DE PROGRAMACIÓN': fechaProg };
-  });
-
-  if (perfil !== 'admin' && horaInicio) {
-    const inicio = new Date(horaInicio);
-    // Margen de 30 días (720 horas) para que la información persista cargada
-    const corte = new Date(inicio.getTime() - 720 * 60 * 60 * 1000);
-    datos = datos.filter(d => {
-      const fecha = d['FECHA DE PROGRAMACIÓN'];
-      if (!fecha) return true;
-      const fechaObj = new Date(fecha);
-      return isNaN(fechaObj.getTime()) || fechaObj >= corte;
+    if (!datos || datos.length === 0) return res.json([]);
+    
+    datos = datos.map(d => {
+      let fechaProg = d['FECHA DE PROGRAMACIÓN'] || d['FECHA DE PROGRAMACION'] || d['FECHA PROG.'] || '';
+      if (fechaProg instanceof Date) {
+        fechaProg = fechaProg.toLocaleString('es-EC', { timeZone: 'America/Guayaquil' });
+      }
+      return { ...d, 'FECHA DE PROGRAMACIÓN': fechaProg };
     });
-  }
 
-  res.json(datos);
+    if (perfil !== 'admin' && horaInicio) {
+      const inicio = new Date(horaInicio);
+      // Margen ajustado a 30 días (720 horas)
+      const corte = new Date(inicio.getTime() - 720 * 60 * 60 * 1000);
+      datos = datos.filter(d => {
+        const fecha = d['FECHA DE PROGRAMACIÓN'];
+        if (!fecha) return true;
+        const fechaObj = new Date(fecha);
+        return isNaN(fechaObj.getTime()) || fechaObj >= corte;
+      });
+    }
+
+    res.json(datos);
+  } catch (error) {
+    console.error('Error en /api/datos:', error);
+    res.status(500).json([]);
+  }
 });
 
-// Editar registros y actualizar Google Drive
+// Editar múltiples registros y guardar en Google Drive
 app.put('/api/editar', async (req, res) => {
-  const items = Array.isArray(req.body) ? req.body : [req.body];
-  let datos = await leerExcelDrive(FILE_ID_BASE);
-  let editados = 0;
+  try {
+    const items = Array.isArray(req.body) ? req.body : [req.body];
+    let datos = await leerExcelDrive(FILE_ID_BASE);
+    let editados = 0;
 
-  items.forEach(item => {
-    const { tarea, operador, observacion, fechaRegistro } = item;
-    if (!observacion || observacion.toLowerCase() === 'pendiente') return;
+    items.forEach(item => {
+      const { tarea, operador, observacion, fechaRegistro } = item;
+      if (!observacion || observacion.toLowerCase() === 'pendiente') return;
 
-    const indice = datos.findIndex(d => String(d.TAREA).trim() === String(tarea).trim());
-    if (indice !== -1) {
-      datos[indice].Operador = operador;
-      datos[indice].Observacion = observacion;
-      datos[indice]['Fecha de Registro'] = fechaRegistro;
-      datos[indice].NuevoRegistro = false;
-      editados++;
-    }
-  });
+      const indice = datos.findIndex(d => String(d.TAREA).trim() === String(tarea).trim());
+      if (indice !== -1) {
+        datos[indice].Operador = operador;
+        datos[indice].Observacion = observacion;
+        datos[indice]['Fecha de Registro'] = fechaRegistro;
+        datos[indice].NuevoRegistro = false;
+        editados++;
+      }
+    });
 
-  await guardarExcelDrive(FILE_ID_BASE, datos);
-  res.json({ ok: true, mensaje: `Se guardaron ${editados} registros correctamente en Google Drive.` });
+    await guardarExcelDrive(FILE_ID_BASE, datos);
+    res.json({ ok: true, mensaje: `Se guardaron ${editados} registros correctamente en Google Drive.` });
+  } catch (error) {
+    res.status(500).json({ mensaje: 'Error al actualizar: ' + error.message });
+  }
 });
 
 // Descargar Excel Completo desde Google Drive
 app.get('/api/descargar', async (req, res) => {
-  let datos = await leerExcelDrive(FILE_ID_BASE);
-  if (!datos || datos.length === 0) {
-    return res.status(404).json({ mensaje: 'Aún no existe una base de datos para descargar.' });
+  try {
+    let datos = await leerExcelDrive(FILE_ID_BASE);
+    if (!datos || datos.length === 0) {
+      return res.status(404).json({ mensaje: 'Aún no existe una base de datos para descargar.' });
+    }
+
+    const datosExportar = datos.map(d => ({
+      TAREA: d.TAREA || '',
+      ORDEN: d.ORDEN || '',
+      CIUDAD: d.CIUDAD || '',
+      TECNICO: d.TECNICO || d['TÉCNICO'] || '',
+      CONTRATO: d.CONTRATO || '',
+      CLIENTE: d.CLIENTE || '',
+      'FECHA DE PROGRAMACIÓN': d['FECHA DE PROGRAMACIÓN'] || d['FECHA DE PROGRAMACION'] || '',
+      Operador: d.Operador || '',
+      'Fecha de Registro': d['Fecha de Registro'] || '',
+      Observacion: d.Observacion || 'Pendiente'
+    }));
+
+    const hoja = xlsx.utils.json_to_sheet(datosExportar);
+    const libro = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(libro, hoja, 'Base_Gestion');
+
+    const buffer = xlsx.write(libro, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=Base_Gestion_Completa.xlsx');
+    res.send(buffer);
+  } catch (error) {
+    res.status(500).json({ mensaje: 'Error al generar la descarga: ' + error.message });
   }
-
-  const datosExportar = datos.map(d => ({
-    TAREA: d.TAREA || '',
-    ORDEN: d.ORDEN || '',
-    CIUDAD: d.CIUDAD || '',
-    TECNICO: d.TECNICO || d['TÉCNICO'] || '',
-    CONTRATO: d.CONTRATO || '',
-    CLIENTE: d.CLIENTE || '',
-    'FECHA DE PROGRAMACIÓN': d['FECHA DE PROGRAMACIÓN'] || d['FECHA DE PROGRAMACION'] || '',
-    Operador: d.Operador || '',
-    'Fecha de Registro': d['Fecha de Registro'] || '',
-    Observacion: d.Observacion || 'Pendiente'
-  }));
-
-  const hoja = xlsx.utils.json_to_sheet(datosExportar);
-  const libro = xlsx.utils.book_new();
-  xlsx.utils.book_append_sheet(libro, hoja, 'Base_Gestion');
-
-  const buffer = xlsx.write(libro, { type: 'buffer', bookType: 'xlsx' });
-  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition', 'attachment; filename=Base_Gestion_Completa.xlsx');
-  res.send(buffer);
 });
 
 // Vaciar base a cero en Google Drive
@@ -198,7 +215,7 @@ app.post('/api/reset-base', async (req, res) => {
   }
 });
 
-// Cargar / Integrar Excel Inteligente hacia Google Drive
+// Cargar / Integrar nuevos Excel en la base de Google Drive
 const carga = multer({ storage: multer.memoryStorage() });
 app.post('/api/cargar-excel', carga.single('archivo'), async (req, res) => {
   const { tipo } = req.body;
