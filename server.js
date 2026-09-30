@@ -205,15 +205,6 @@ app.get('/api/descargar', async (req, res) => {
   }
 });
 
-// Vaciar base a cero en Google Drive
-app.post('/api/reset-base', async (req, res) => {
-  try {
-    await guardarExcelDrive(FILE_ID_BASE, []);
-    res.json({ ok: true, mensaje: 'Base de datos en Google Drive vaciada por completo.' });
-  } catch (error) {
-    res.status(500).json({ mensaje: 'Error al vaciar base: ' + error.message });
-  }
-});
 
 // Cargar / Integrar nuevos Excel en la base de Google Drive
 const carga = multer({ storage: multer.memoryStorage() });
