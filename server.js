@@ -109,9 +109,9 @@ app.get('/api/listas', (req, res) => {
 });
 
 // Obtener datos desde Google Drive
+// Obtener datos desde Google Drive
 app.get('/api/datos', async (req, res) => {
   try {
-    const { perfil, horaInicio } = req.query;
     let datos = await leerExcelDrive(FILE_ID_BASE);
 
     if (!datos || datos.length === 0) return res.json([]);
@@ -123,18 +123,6 @@ app.get('/api/datos', async (req, res) => {
       }
       return { ...d, 'FECHA DE PROGRAMACIÓN': fechaProg };
     });
-
-    if (perfil !== 'admin' && horaInicio) {
-      const inicio = new Date(horaInicio);
-      // Margen ajustado a 30 días (720 horas)
-      const corte = new Date(inicio.getTime() - 720 * 60 * 60 * 1000);
-      datos = datos.filter(d => {
-        const fecha = d['FECHA DE PROGRAMACIÓN'];
-        if (!fecha) return true;
-        const fechaObj = new Date(fecha);
-        return isNaN(fechaObj.getTime()) || fechaObj >= corte;
-      });
-    }
 
     res.json(datos);
   } catch (error) {
