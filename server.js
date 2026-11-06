@@ -131,7 +131,7 @@ app.get('/api/datos', async (req, res) => {
   }
 });
 
-// Editar múltiples registros y guardar en Google Drive
+// Editar registros en Google Drive (Actualiza TODAS las filas que compartan el mismo ID de TAREA)
 app.put('/api/editar', async (req, res) => {
   try {
     const items = Array.isArray(req.body) ? req.body : [req.body];
@@ -142,18 +142,22 @@ app.put('/api/editar', async (req, res) => {
       const { tarea, operador, observacion, fechaRegistro } = item;
       if (!observacion || observacion.toLowerCase() === 'pendiente') return;
 
-      const indice = datos.findIndex(d => String(d.TAREA).trim() === String(tarea).trim());
-      if (indice !== -1) {
-        datos[indice].Operador = operador;
-        datos[indice].Observacion = observacion;
-        datos[indice]['Fecha de Registro'] = fechaRegistro;
-        datos[indice].NuevoRegistro = false;
-        editados++;
-      }
+      const tareaBuscada = String(tarea).trim();
+
+      // Recorremos toda la base para actualizar CUALQUIER fila que tenga este mismo número de TAREA
+      datos.forEach(d => {
+        if (String(d.TAREA).trim() === tareaBuscada) {
+          d.Operador = operador;
+          d.Observacion = observacion;
+          d['Fecha de Registro'] = fechaRegistro;
+          d.NuevoRegistro = false;
+          editados++;
+        }
+      });
     });
 
     await guardarExcelDrive(FILE_ID_BASE, datos);
-    res.json({ ok: true, mensaje: `Se guardaron ${editados} registros correctamente en Google Drive.` });
+    res.json({ ok: true, mensaje: `Se sincronizaron y guardaron los cambios para ${editados} registros asociados en Google Drive.` });
   } catch (error) {
     res.status(500).json({ mensaje: 'Error al actualizar: ' + error.message });
   }
