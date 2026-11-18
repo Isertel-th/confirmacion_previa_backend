@@ -12,9 +12,6 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-// -------------------------------------------------------------
-// CONFIGURACIÓN DE GOOGLE DRIVE Y ARCHIVOS LOCALES
-// -------------------------------------------------------------
 const authConfig = process.env.GOOGLE_CREDENTIALS
   ? { credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS), scopes: ['https://www.googleapis.com/auth/drive'] }
   : { keyFile: path.join(__dirname, 'credentials.json'), scopes: ['https://www.googleapis.com/auth/drive'] };
@@ -71,17 +68,14 @@ async function guardarExcelDrive(fileId, datos) {
         body: bufferStream,
       },
     });
-    console.log('✅ Archivo sincronizado y guardado correctamente en Google Drive');
+    console.log('✅ Archivo sincronizado correctamente en Google Drive');
   } catch (err) {
     console.error('Error al guardar Excel en Drive:', err.message);
     throw err;
   }
 }
 
-// -------------------------------------------------------------
-// ENDPOINTS DE LA API
-// -------------------------------------------------------------
-
+// Login
 app.post('/api/login', (req, res) => {
   const { usuario, clave } = req.body;
   const usuarios = leerExcelLocal(PATH_USERS);
@@ -96,30 +90,49 @@ app.post('/api/login', (req, res) => {
   }
 });
 
+// Listas de observaciones
 app.get('/api/listas', (req, res) => {
   let observaciones = leerExcelLocal(PATH_OBS).map(o => o.OBSERVACION).filter(Boolean);
   observaciones = observaciones.filter(obs => obs.toLowerCase() !== 'pendiente');
   res.json({ observaciones });
 });
 
+// Obtener datos de Google Drive con normalización robusta de claves
 app.get('/api/datos', async (req, res) => {
   try {
     let datos = await leerExcelDrive(FILE_ID_BASE);
     if (!datos || datos.length === 0) return res.json([]);
-    
-    datos = datos.map(d => {
-      let fechaProg = d['FECHA DE PROGRAMACIÓN'] || d['FECHA DE PROGRAMACION'] || d['FECHA PROG.'] || '';
-      return { ...d, 'FECHA DE PROGRAMACIÓN': fechaProg };
+
+    const datosNormalizados = datos.map(d => {
+      const norm = {};
+      Object.keys(d).forEach(k => {
+        norm[k.trim()] = d[k];
+        norm[k.trim().toUpperCase()] = d[k];
+      });
+
+      return {
+        TAREA: norm['TAREA'] || norm['Task'] || norm['TASK'] || '',
+        ORDEN: norm['ORDEN'] || norm['Order'] || norm['ORDER'] || '',
+        CIUDAD: norm['CIUDAD'] || norm['Ciudad'] || '',
+        TECNICO: norm['TECNICO'] || norm['TÉCNICO'] || norm['Tecnico'] || '',
+        CONTRATO: norm['CONTRATO'] || norm['Contrato'] || '',
+        CLIENTE: norm['CLIENTE'] || norm['Cliente'] || '',
+        'FECHA DE PROGRAMACIÓN': norm['FECHA DE PROGRAMACIÓN'] || norm['FECHA DE PROGRAMACION'] || norm['FECHA PROG.'] || norm['FECHA'] || '',
+        Operador: norm['OPERADOR'] || norm['Operador'] || '',
+        'Fecha de Registro': norm['FECHA DE REGISTRO'] || norm['Fecha de Registro'] || '',
+        Observacion: norm['OBSERVACION'] || norm['OBSERVACIÓN'] || norm['Observacion'] || 'Pendiente',
+        NuevoRegistro: norm['NUEVOREGISTRO'] || norm['NuevoRegistro'] || false
+      };
     });
 
-    res.json(datos);
+    res.json(datosNormalizados);
   } catch (error) {
     console.error('Error en /api/datos:', error);
     res.status(500).json([]);
   }
 });
 
-// Endpoint de Edición: Unifica y actualiza TODAS las filas con el mismo ID de TAREA
+// Editar registros
 app.put('/api/editar', async (req, res) => {
   try {
     const items = Array.isArray(req.body) ? req.body : [req.body];
@@ -133,7 +146,8 @@ app.put('/api/editar', async (req, res) => {
       const tareaBuscada = String(tarea).trim();
 
       datos.forEach(d => {
-        if (String(d.TAREA).trim() === tareaBuscada) {
+        const tActual = String(d.TAREA || d.Task || d.TASK || '').trim();
+        if (tActual === tareaBuscada) {
           d.Operador = operador;
           d.Observacion = observacion;
           d['Fecha de Registro'] = fechaRegistro;
@@ -144,12 +158,13 @@ app.put('/api/editar', async (req, res) => {
     });
 
     await guardarExcelDrive(FILE_ID_BASE, datos);
-    res.json({ ok: true, mensaje: `Se sincronizaron ${editados} registros asociados al ID de Tarea en Google Drive.` });
+    res.json({ ok: true, mensaje: `Se sincronizaron ${editados} registros asociados al ID de Tarea.` });
   } catch (error) {
     res.status(500).json({ ok: false, mensaje: 'Error al actualizar: ' + error.message });
   }
 });
 
+// Descargar Excel Completo
 app.get('/api/descargar', async (req, res) => {
   try {
     let datos = await leerExcelDrive(FILE_ID_BASE);
@@ -170,6 +185,7 @@ app.get('/api/descargar', async (req, res) => {
   }
 });
 
+// Cargar / Integrar nuevo Excel
 const carga = multer({ storage: multer.memoryStorage() });
 app.post('/api/cargar-excel', carga.single('archivo'), async (req, res) => {
   const { tipo } = req.body;
@@ -184,16 +200,17 @@ app.post('/api/cargar-excel', carga.single('archivo'), async (req, res) => {
 
     let baseActual = await leerExcelDrive(FILE_ID_BASE);
     
-    // Mapa rápido para preservar gestiones previas si el ID de Tarea ya estaba gestionado
     const mapaGestionados = new Map();
     baseActual.forEach(b => {
-      const t = String(b.TAREA || '').trim();
-      const obs = String(b.Observacion || '').trim();
+      const normB = {};
+      Object.keys(b).forEach(k => normB[k.trim().toUpperCase()] = b[k]);
+      const t = String(normB['TAREA'] || normB['TASK'] || '').trim();
+      const obs = String(normB['OBSERVACION'] || normB['OBSERVACIÓN'] || '').trim();
       if (t && obs && obs.toLowerCase() !== 'pendiente' && obs.toLowerCase() !== '-- seleccionar --') {
         mapaGestionados.set(t, {
-          Operador: b.Operador,
-          Observacion: b.Observacion,
-          'Fecha de Registro': b['Fecha de Registro'] || ''
+          Operador: normB['OPERADOR'] || '',
+          Observacion: obs,
+          'Fecha de Registro': normB['FECHA DE REGISTRO'] || ''
         });
       }
     });
@@ -206,7 +223,7 @@ app.post('/api/cargar-excel', carga.single('archivo'), async (req, res) => {
       const norm = {};
       Object.keys(nuevo).forEach(k => norm[k.trim().toUpperCase()] = nuevo[k]);
 
-      const tarea = norm['TAREA'] || nuevo['TAREA'] || nuevo['Tarea'];
+      const tarea = norm['TAREA'] || norm['TASK'] || '';
       if (!tarea) return;
 
       const tareaStr = String(tarea).trim();
@@ -245,11 +262,11 @@ app.post('/api/cargar-excel', carga.single('archivo'), async (req, res) => {
     await guardarExcelDrive(FILE_ID_BASE, nuevaBaseProcesada);
     res.json({ 
       ok: true, 
-      mensaje: `✅ Archivo procesado con éxito. Nuevos pendientes: ${nuevosPendientes} | Gestionados preservados/cargados: ${recuperadosGestionados}.` 
+      mensaje: `✅ Archivo procesado. Nuevos pendientes: ${nuevosPendientes} | Gestionados preservados: ${recuperadosGestionados}.` 
     });
   } catch (error) {
     res.status(500).json({ ok: false, mensaje: 'Error al procesar el archivo: ' + error.message });
   }
 });
 
-app.listen(PORT, () => console.log(`🚀 Servidor Isertel corriendo en puerto ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Servidor Isertel en puerto ${PORT}`));
