@@ -29,6 +29,44 @@ const FILE_ID_BASE = '1Y2p2S6NXHIfAutb_PsqJAFvvyqHSGz62';
 const PATH_USERS = path.join(__dirname, 'docs', 'usuarios.xlsx');
 const PATH_OBS = path.join(__dirname, 'docs', 'observaciones.xlsx');
 
+// ✅ NUEVA FUNCIÓN: Normalizar cualquier formato de fecha a DD/MM/AAAA
+function normalizarFecha(fecha) {
+  if (!fecha) return '';
+  let texto = String(fecha).trim();
+  
+  // Caso 1: Ya viene como DD/MM/AAAA
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(texto)) {
+    return texto;
+  }
+  
+  // Caso 2: Viene como MM/DD/AA → convertir a DD/MM/AAAA
+  const mmddaa = /^(\d{1,2})\/(\d{1,2})\/(\d{2})$/;
+  let m = texto.match(mmddaa);
+  if (m) {
+    let mes = m[1], dia = m[2], anio = '20' + m[3];
+    return `${dia}/${mes}/${anio}`;
+  }
+  
+  // Caso 3: Viene como AAAA/MM/DD → convertir a DD/MM/AAAA
+  const aaaammdd = /^(\d{4})\/(\d{1,2})\/(\d{1,2})$/;
+  m = texto.match(aaaammdd);
+  if (m) {
+    let anio = m[1], mes = m[2], dia = m[3];
+    return `${dia}/${mes}/${anio}`;
+  }
+  
+  // Si llega como objeto Date
+  if (fecha instanceof Date) {
+    const d = String(fecha.getDate()).padStart(2, '0');
+    const M = String(fecha.getMonth() + 1).padStart(2, '0');
+    const y = fecha.getFullYear();
+    return `${d}/${M}/${y}`;
+  }
+  
+  return texto;
+}
+
+
 function leerExcelLocal(ruta) {
   const fs = require('fs');
   if (!fs.existsSync(ruta)) return [];
@@ -123,17 +161,13 @@ app.get('/api/datos', async (req, res) => {
 
     if (!datos || datos.length === 0) return res.json([]);
     
-    datos = datos.map(d => {
-      let fechaProg = d['FECHA DE PROGRAMACIÓN'] || d['FECHA DE PROGRAMACION'] || d['FECHA PROG.'] || '';
-      // Si por alguna razón llega como objeto Date, convertirlo manualmente al formato deseado
-      if (fechaProg instanceof Date) {
-        const dia = String(fechaProg.getDate()).padStart(2, '0');
-        const mes = String(fechaProg.getMonth() + 1).padStart(2, '0');
-        const anio = fechaProg.getFullYear();
-        fechaProg = `${dia}/${mes}/${anio}`;
-      }
-      return { ...d, 'FECHA DE PROGRAMACIÓN': fechaProg };
-    });
+datos = datos.map(d => {
+  let fechaProg = d['FECHA DE PROGRAMACIÓN'] || d['FECHA DE PROGRAMACION'] || d['FECHA PROG.'] || '';
+  return { 
+    ...d, 
+    'FECHA DE PROGRAMACIÓN': normalizarFecha(fechaProg) // ✅ Normalizar siempre
+  };
+});
 
     res.json(datos);
   } catch (error) {
@@ -233,41 +267,44 @@ app.post('/api/cargar-excel', carga.single('archivo'), async (req, res) => {
     let nuevosPendientes = 0;
     let recuperadosGestionados = 0;
 
-    datosNuevos.forEach(nuevo => {
-      const norm = {};
-      Object.keys(nuevo).forEach(k => norm[k.trim().toUpperCase()] = nuevo[k]);
+datosNuevos.forEach(nuevo => {
+  const norm = {};
+  Object.keys(nuevo).forEach(k => norm[k.trim().toUpperCase()] = nuevo[k]);
 
-      const tarea = norm['TAREA'] || nuevo['TAREA'] || nuevo['Tarea'];
-      if (!tarea) return;
+  const tarea = norm['TAREA'] || nuevo['TAREA'] || nuevo['Tarea'];
+  if (!tarea) return;
 
-      const obsSubida = (nuevo['Observacion'] || nuevo['OBSERVACION'] || norm['OBSERVACION'] || '').toString().trim();
-      const opSubido = (nuevo['Operador'] || nuevo['OPERADOR'] || norm['OPERADOR'] || '').toString().trim();
-      const fechaRegSubida = (nuevo['Fecha de Registro'] || nuevo['FECHA DE REGISTRO'] || norm['FECHA DE REGISTRO'] || '').toString().trim();
+  const obsSubida = (nuevo['Observacion'] || nuevo['OBSERVACION'] || norm['OBSERVACION'] || '').toString().trim();
+  const opSubido = (nuevo['Operador'] || nuevo['OPERADOR'] || norm['OPERADOR'] || '').toString().trim();
+  const fechaRegSubida = (nuevo['Fecha de Registro'] || nuevo['FECHA DE REGISTRO'] || norm['FECHA DE REGISTRO'] || '').toString().trim();
+  
+  // ✅ Normalizar fecha de programación
+  let fechaProg = norm['FECHA DE PROGRAMACIÓN'] || norm['FECHA DE PROGRAMACION'] || norm['FECHA PROG.'] || '';
+  fechaProg = normalizarFecha(fechaProg);
 
-      const existe = baseActual.find(b => String(b.TAREA).trim() === String(tarea).trim());
+  const existe = baseActual.find(b => String(b.TAREA).trim() === String(tarea).trim());
 
-      if (!existe) {
-        const estaGestionado = obsSubida !== '' && obsSubida.toLowerCase() !== 'pendiente';
+  if (!existe) {
+    const estaGestionado = obsSubida !== '' && obsSubida.toLowerCase() !== 'pendiente';
 
-        baseActual.push({
-          TAREA: tarea,
-          ORDEN: norm['ORDEN'] || '',
-          CIUDAD: norm['CIUDAD'] || '',
-          TECNICO: norm['TECNICO'] || norm['TÉCNICO'] || '',
-          CONTRATO: norm['CONTRATO'] || '',
-          CLIENTE: norm['CLIENTE'] || '',
-          'FECHA DE PROGRAMACIÓN': norm['FECHA DE PROGRAMACIÓN'] || norm['FECHA DE PROGRAMACION'] || norm['FECHA PROG.'] || '',
-          Operador: opSubido,
-          Observacion: obsSubida || 'Pendiente',
-          'Fecha de Registro': fechaRegSubida,
-          NuevoRegistro: !estaGestionado
-        });
-
-        if (estaGestionado) recuperadosGestionados++;
-        else nuevosPendientes++;
-      }
+    baseActual.push({
+      TAREA: tarea,
+      ORDEN: norm['ORDEN'] || '',
+      CIUDAD: norm['CIUDAD'] || '',
+      TECNICO: norm['TECNICO'] || norm['TÉCNICO'] || '',
+      CONTRATO: norm['CONTRATO'] || '',
+      CLIENTE: norm['CLIENTE'] || '',
+      'FECHA DE PROGRAMACIÓN': fechaProg, // ✅ Ya normalizada
+      Operador: opSubido,
+      Observacion: obsSubida || 'Pendiente',
+      'Fecha de Registro': fechaRegSubida,
+      NuevoRegistro: !estaGestionado
     });
 
+    if (estaGestionado) recuperadosGestionados++;
+    else nuevosPendientes++;
+  }
+});
     await guardarExcelDrive(FILE_ID_BASE, baseActual);
     res.json({ 
       ok: true, 
