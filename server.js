@@ -33,25 +33,32 @@ function leerExcelLocal(ruta) {
   const fs = require('fs');
   if (!fs.existsSync(ruta)) return [];
   try {
-    const libro = xlsx.readFile(ruta, { cellDates: true, dateNF: 'yyyy-mm-dd hh:mm:ss' });
+    const libro = xlsx.readFile(ruta, { cellDates: false }); // ❌ NO convertir fechas automáticamente
     const hoja = libro.Sheets[libro.SheetNames[0]];
-    return xlsx.utils.sheet_to_json(hoja, { raw: false, defval: '' });
+    return xlsx.utils.sheet_to_json(hoja, { 
+      raw: false, 
+      defval: '',
+      dateNF: 'DD/MM/YYYY' // ✅ Leer fechas ya formateadas como texto
+    });
   } catch (err) {
     console.error('Error al leer Excel local:', err);
     return [];
   }
 }
 
-// Función para LEER Excel desde Google Drive
 async function leerExcelDrive(fileId) {
   try {
     const res = await drive.files.get(
       { fileId: fileId, alt: 'media' },
       { responseType: 'arraybuffer' }
     );
-    const libro = xlsx.read(res.data, { cellDates: true, dateNF: 'yyyy-mm-dd hh:mm:ss' });
+    const libro = xlsx.read(res.data, { cellDates: false }); // ❌ NO convertir a Date
     const hoja = libro.Sheets[libro.SheetNames[0]];
-    return xlsx.utils.sheet_to_json(hoja, { raw: false, defval: '' });
+    return xlsx.utils.sheet_to_json(hoja, { 
+      raw: false, 
+      defval: '',
+      dateNF: 'DD/MM/YYYY' // ✅ Mantener formato DD/MM/AAAA
+    });
   } catch (err) {
     console.error('Error al leer Excel desde Drive:', err.message);
     return [];
@@ -118,8 +125,12 @@ app.get('/api/datos', async (req, res) => {
     
     datos = datos.map(d => {
       let fechaProg = d['FECHA DE PROGRAMACIÓN'] || d['FECHA DE PROGRAMACION'] || d['FECHA PROG.'] || '';
+      // Si por alguna razón llega como objeto Date, convertirlo manualmente al formato deseado
       if (fechaProg instanceof Date) {
-        fechaProg = fechaProg.toLocaleString('es-EC', { timeZone: 'America/Guayaquil' });
+        const dia = String(fechaProg.getDate()).padStart(2, '0');
+        const mes = String(fechaProg.getMonth() + 1).padStart(2, '0');
+        const anio = fechaProg.getFullYear();
+        fechaProg = `${dia}/${mes}/${anio}`;
       }
       return { ...d, 'FECHA DE PROGRAMACIÓN': fechaProg };
     });
@@ -207,9 +218,14 @@ app.post('/api/cargar-excel', carga.single('archivo'), async (req, res) => {
   }
 
   try {
-    const libro = xlsx.read(req.file.buffer, { cellDates: true, dateNF: 'yyyy-mm-dd hh:mm:ss' });
+// ✅ DESPUÉS:
+    const libro = xlsx.read(req.file.buffer, { cellDates: false });
     const hoja = libro.Sheets[libro.SheetNames[0]];
-    const datosNuevos = xlsx.utils.sheet_to_json(hoja, { raw: false, defval: '' });
+    const datosNuevos = xlsx.utils.sheet_to_json(hoja, { 
+      raw: false, 
+      defval: '',
+      dateNF: 'DD/MM/YYYY'
+    });
 
     let baseActual = await leerExcelDrive(FILE_ID_BASE);
     baseActual = baseActual.map(d => ({ ...d, NuevoRegistro: false }));
