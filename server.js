@@ -49,8 +49,11 @@ async function leerExcelDrive(fileId) {
       { fileId: fileId, alt: 'media' },
       { responseType: 'arraybuffer' }
     );
-    const libro = xlsx.read(res.data, { cellDates: true, dateNF: 'yyyy-mm-dd hh:mm:ss' });
+    // Usamos cellDates: true para que xlsx interprete las celdas como fechas
+    // dateNF: 'dd/mm/yyyy' para intentar que se lean en el formato deseado, aunque la conversión a JS Date es más robusta
+    const libro = xlsx.read(res.data, { cellDates: true, dateNF: 'dd/mm/yyyy' });
     const hoja = libro.Sheets[libro.SheetNames[0]];
+    // raw: false para obtener valores formateados, defval: '' para celdas vacías
     return xlsx.utils.sheet_to_json(hoja, { raw: false, defval: '' });
   } catch (err) {
     console.error('Error al leer Excel desde Drive:', err.message);
@@ -115,11 +118,16 @@ app.get('/api/datos', async (req, res) => {
     let datos = await leerExcelDrive(FILE_ID_BASE);
 
     if (!datos || datos.length === 0) return res.json([]);
-    
+
     datos = datos.map(d => {
       let fechaProg = d['FECHA DE PROGRAMACIÓN'] || d['FECHA DE PROGRAMACION'] || d['FECHA PROG.'] || '';
       if (fechaProg instanceof Date) {
-        fechaProg = fechaProg.toLocaleString('es-EC', { timeZone: 'America/Guayaquil' });
+        // Formateamos la fecha a DD/MM/YYYY para el frontend
+        // Aseguramos que la zona horaria sea la correcta si es necesario
+        fechaProg = fechaProg.toLocaleString('es-EC', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '/');
+      } else if (typeof fechaProg === 'string' && fechaProg.includes('/')) {
+         // Si ya es una cadena con '/', la dejamos como está, asumiendo que ya tiene el formato correcto
+         // Opcionalmente, se podría intentar normalizarla aquí también si hay inconsistencias
       }
       return { ...d, 'FECHA DE PROGRAMACIÓN': fechaProg };
     });
